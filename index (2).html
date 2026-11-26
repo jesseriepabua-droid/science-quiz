@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Science Battle — Multiplayer Quiz</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <!-- HOME / JOIN SCREEN -->
+    <section id="home-screen" class="card active">
+      <h1>🔬 Science Quiz Arena</h1>
+      <p class="subtitle">3 Rounds • Easy (1pt) • Average (3pts) • Hard (5pts)</p>
+
+      <input type="text" id="player-name" placeholder="Enter your nickname" maxlength="16" />
+
+      <div class="btn-group">
+        <button id="create-btn" class="btn primary">Create Multiplayer Room</button>
+      </div>
+
+      <div class="divider"><span>OR JOIN EXISTING</span></div>
+
+      <div class="join-row">
+        <input type="text" id="room-code-input" placeholder="ROOM CODE" maxlength="4" />
+        <button id="join-btn" class="btn secondary">Join</button>
+      </div>
+      <p id="error-text" class="error"></p>
+    </section>
+
+    <!-- LOBBY SCREEN -->
+    <section id="lobby-screen" class="card">
+      <h2>Room Code: <span id="display-room-code" class="badge">----</span></h2>
+      <p class="subtitle">Share this code with other players to join!</p>
+
+      <div class="rules-box">
+        <div>🟢 <strong>Easy:</strong> 10 Qs • 10s • 1 pt</div>
+        <div>🟡 <strong>Average:</strong> 8 Qs • 15s • 3 pts</div>
+        <div>🔴 <strong>Hard:</strong> 5 Qs • 20s • 5 pts</div>
+      </div>
+
+      <h3>Players in Lobby (<span id="player-count">1</span>)</h3>
+      <ul id="lobby-player-list" class="player-list"></ul>
+
+      <button id="start-btn" class="btn primary hidden">Start Science Quiz</button>
+      <p id="waiting-host-msg" class="subtitle">Waiting for host to start the game...</p>
+    </section>
+
+    <!-- LOADING SCREEN -->
+    <section id="loading-screen" class="card">
+      <h2>🧪 Preparing Science Questions...</h2>
+      <p class="subtitle">Fetching Easy, Average, and Hard challenges...</p>
+    </section>
+
+    <!-- QUIZ GAMEPLAY SCREEN -->
+    <section id="quiz-screen" class="card">
+      <div class="quiz-header">
+        <span id="round-badge" class="round-tag easy">Easy Round (1 pt)</span>
+        <span id="question-counter">Q 1 / 10</span>
+        <span id="timer-display" class="timer">10s</span>
+      </div>
+
+      <div class="timer-bar-bg">
+        <div id="timer-bar" class="timer-bar"></div>
+      </div>
+
+      <h2 id="question-text" class="question-text">Loading question...</h2>
+
+      <div id="options-grid" class="options-grid"></div>
+
+      <div id="feedback-banner" class="feedback hidden"></div>
+    </section>
+
+    <!-- FINAL PODIUM & RANKING SCREEN -->
+    <section id="podium-screen" class="card">
+      <h1>🏆 Final Science Rankings</h1>
+
+      <div id="podium-container" class="podium"></div>
+
+      <h3>Full Standings</h3>
+      <ul id="full-ranking-list" class="ranking-list"></ul>
+
+      <button id="play-again-btn" class="btn primary hidden">Play Again</button>
+    </section>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io();
+
+    const screens = {
+      home: document.getElementById('home-screen'),
+      lobby: document.getElementById('lobby-screen'),
+      loading: document.getElementById('loading-screen'),
+      quiz: document.getElementById('quiz-screen'),
+      podium: document.getElementById('podium-screen')
+    };
+
+    let isHost = false;
+    let currentTimeLimit = 10;
+    let selectedOption = null;
+
+    function showScreen(name) {
+      Object.values(screens).forEach((s) => s.classList.remove('active'));
+      screens[name].classList.add('active');
+    }
+
+    // Create Room
+    document.getElementById('create-btn').onclick = () => {
+      const playerName = document.getElementById('player-name').value.trim();
+      if (!playerName) return (document.getElementById('error-text').innerText = 'Please enter your name.');
+      socket.emit('createRoom', { playerName });
+    };
+
+    // Join Room
+    document.getElementById('join-btn').onclick = () => {
+      const playerName = document.getElementById('player-name').value.trim();
+      const roomCode = document.getElementById('room-code-input').value.trim();
+      if (!playerName || !roomCode) {
+        return (document.getElementById('error-text').innerText = 'Enter both your name and room code.');
+      }
+      socket.emit('joinRoom', { roomCode, playerName });
+    };
+
+    // Start Game
+    document.getElementById('start-btn').onclick = () => socket.emit('startGame');
+    document.getElementById('play-again-btn').onclick = () => socket.emit('startGame');
+
+    socket.on('errorMsg', (msg) => {
+      document.getElementById('error-text').innerText = msg;
+    });
+
+    socket.on('roomJoined', ({ roomCode, isHost: hostStatus, players }) => {
+      isHost = hostStatus;
+      document.getElementById('display-room-code').innerText = roomCode;
+      updateHostControls();
+      renderLobbyPlayers(players);
+      showScreen('lobby');
+    });
+
+    socket.on('promotedToHost', () => {
+      isHost = true;
+      updateHostControls();
+    });
+
+    function updateHostControls() {
+      if (isHost) {
+        document.getElementById('start-btn').classList.remove('hidden');
+        document.getElementById('play-again-btn').classList.remove('hidden');
+        document.getElementById('waiting-host-msg').classList.add('hidden');
+      }
+    }
+
+    socket.on('updatePlayers', renderLobbyPlayers);
+
+    function renderLobbyPlayers(players) {
+      document.getElementById('player-count').innerText = players.length;
+      const list = document.getElementById('lobby-player-list');
+      list.innerHTML = players.map((p) => `<li>🧑‍🔬 ${escapeHtml(p.name)}</li>`).join('');
+    }
+
+    socket.on('loadingGame', () => showScreen('loading'));
+
+    socket.on('newQuestion', (data) => {
+      selectedOption = null;
+      currentTimeLimit = data.timeLimit;
+      showScreen('quiz');
+
+      const badge = document.getElementById('round-badge');
+      badge.innerText = `${data.roundName} (+${data.points} pt${data.points > 1 ? 's' : ''})`;
+      badge.className = `round-tag ${data.difficulty}`;
+
+      document.getElementById('question-counter').innerText =
+        `Round Q ${data.roundQuestionNum}/${data.roundTotal} (Total ${data.overallIndex}/${data.overallTotal})`;
+
+      updateTimerUI(data.timeLimit);
+      document.getElementById('question-text').innerText = data.question;
+
+      const feedback = document.getElementById('feedback-banner');
+      feedback.classList.add('hidden');
+      feedback.className = 'feedback hidden';
+
+      const grid = document.getElementById('options-grid');
+      grid.innerHTML = '';
+      data.options.forEach((opt) => {
+        const btn = document.createElement('button');
+        btn.className = 'option-btn';
+        btn.innerText = opt;
+        btn.onclick = () => selectAnswer(btn, opt);
+        grid.appendChild(btn);
+      });
+    });
+
+    function selectAnswer(btn, opt) {
+      if (selectedOption !== null) return;
+      selectedOption = opt;
+
+      document.querySelectorAll('.option-btn').forEach((b) => {
+        b.disabled = true;
+        if (b === btn) b.classList.add('selected');
+      });
+
+      socket.emit('submitAnswer', { answer: opt });
+    }
+
+    socket.on('timerTick', ({ timeLeft }) => updateTimerUI(timeLeft));
+
+    function updateTimerUI(timeLeft) {
+      document.getElementById('timer-display').innerText = `${timeLeft}s`;
+      const pct = Math.max(0, (timeLeft / currentTimeLimit) * 100);
+      const bar = document.getElementById('timer-bar');
+      bar.style.width = `${pct}%`;
+      bar.style.backgroundColor = timeLeft <= 3 ? '#ef4444' : '#38bdf8';
+    }
+
+    socket.on('answerFeedback', ({ isCorrect, pointsEarned, totalScore }) => {
+      const feedback = document.getElementById('feedback-banner');
+      feedback.classList.remove('hidden');
+      if (isCorrect) {
+        feedback.classList.add('correct');
+        feedback.innerText = `✅ Correct! +${pointsEarned} pts (Your Total: ${totalScore} pts)`;
+      } else {
+        feedback.classList.add('wrong');
+        feedback.innerText = `❌ Incorrect! (Your Total: ${totalScore} pts)`;
+      }
+    });
+
+    socket.on('revealAnswer', ({ correctAnswer }) => {
+      document.querySelectorAll('.option-btn').forEach((btn) => {
+        btn.disabled = true;
+        if (btn.innerText === correctAnswer) {
+          btn.classList.add('correct-answer');
+        } else if (btn.innerText === selectedOption) {
+          btn.classList.add('wrong-answer');
+        }
+      });
+    });
+
+    socket.on('gameOver', ({ rankings }) => {
+      showScreen('podium');
+
+      const podiumEl = document.getElementById('podium-container');
+      const top3 = [
+        { rank: 2, trophy: '🥈', label: '2nd Place', player: rankings[1], cls: 'second' },
+        { rank: 1, trophy: '🏆', label: '1st Place', player: rankings[0], cls: 'first' },
+        { rank: 3, trophy: '🥉', label: '3rd Place', player: rankings[2], cls: 'third' }
+      ];
+
+      podiumEl.innerHTML = top3
+        .filter((item) => item.player)
+        .map(
+          (item) => `
+          <div class="podium-slot ${item.cls}">
+            <div class="trophy">${item.trophy}</div>
+            <div class="podium-name">${escapeHtml(item.player.name)}</div>
+            <div class="podium-pts">${item.player.score} pts</div>
+            <div class="podium-bar">${item.label}</div>
+          </div>
+        `
+        )
+        .join('');
+
+      const listEl = document.getElementById('full-ranking-list');
+      listEl.innerHTML = rankings
+        .map((p, idx) => {
+          const medal = idx === 0 ? '🏆' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : `#${idx + 1}`;
+          return `<li><span>${medal} ${escapeHtml(p.name)}</span><strong>${p.score} pts</strong></li>`;
+        })
+        .join('');
+    });
+
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+  </script>
+</body>
+</html>
